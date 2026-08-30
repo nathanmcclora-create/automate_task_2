@@ -10,6 +10,10 @@ ROUTER_NODE = "ROUTER1" # dhcp service
 SWITCH_NODES = ["SW1", "SW2", "SW3", "SW4"]
 DHCP_CLIENT_NODES = ["PC1", "PC2", "PC3", "PC4", "WEBTERM"]
 
+NODE_ALIASES = {
+    "WEBTERM": ["VNC"],
+}
+
 DELAY_AFTER_DHCP_START = 120  # seconds
 
 session = requests.Session()
@@ -20,10 +24,15 @@ def get_nodes():
     return r.json()
 
 def find_node_by_name(nodes, name):
+    targets = [name]
+    targets.extend(NODE_ALIASES.get(name, []))
+    lowered_targets = {target.lower() for target in targets}
+
     for node in nodes:
-        if node["name"] == name:
+        if node["name"].lower() in lowered_targets:
             return node
-    raise ValueError(f"Node not found: {name}")
+
+    raise ValueError(f"Node not found: {name} (aliases tried: {targets})")
 
 def start_node(node_id, node_name):
     r = session.post(f"{GNS3_SERVER}/v2/projects/{PROJECT_ID}/nodes/{node_id}/start")
@@ -64,7 +73,11 @@ def main():
 
     print_green("\nStarting DHCP clients...")
     for name in DHCP_CLIENT_NODES:
-        node = find_node_by_name(nodes, name)
+        try:
+            node = find_node_by_name(nodes, name)
+        except ValueError as exc:
+            print(f"Skipped: {exc}")
+            continue
         start_node(node["node_id"], node["name"])
 
     print_green("GNS3 network startup complete.")
