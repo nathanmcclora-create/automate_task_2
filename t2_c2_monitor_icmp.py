@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import ipaddress
 import os
 import re
@@ -13,6 +14,8 @@ import time
 from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
+
+from t2_c3_create_ticket import create_ticket
 
 
 CSV_CANDIDATES = (
@@ -212,8 +215,20 @@ def send_failure_email(device_name: str, ip_address: str, reason: str, timestamp
 		return False
 
 
+def create_failure_ticket(device_name: str, ip_address: str, reason: str, timestamp: str) -> bool:
+	"""Create a helpdesk ticket for a failed device check and print the API response."""
+	status, response = create_ticket(device_name, ip_address, reason)
+	success = 200 <= status < 300 and isinstance(response, dict) and "id" in response
+	result = "SUCCESS" if success else "FAILED"
+	print(f"{result}: Ticket creation for {device_name} ({ip_address}) - HTTP {status}")
+	print(json.dumps(response, indent=2))
+	return success
+
+
 def monitor_devices() -> None:
 	print("Starting ICMP monitoring loop. Press Ctrl+C to stop.")
+	open_incidents: set[str] = set()
+	open_email_alerts: set[str] = set()
 	try:
 		while True:
 			devices = load_devices()
@@ -230,9 +245,20 @@ def monitor_devices() -> None:
 					if not ip_address:
 						status = "FAIL"
 						print(f"{timestamp} | Hostname: {name} | IP address: DHCP | Status: {status}")
-						email_ok = send_failure_email(name, "DHCP", reason, timestamp)
-						if email_ok:
-							print(f"ALERT SENT: {name} DHCP resolution failure email accepted by SMTP")
+						if name not in open_incidents:
+							ticket_ok = create_failure_ticket(name, "DHCP", reason, timestamp)
+							if ticket_ok:
+								open_incidents.add(name)
+								print(f"TICKET CREATED: {name} DHCP resolution failure was recorded in Helpdesk")
+						else:
+							print(f"TICKET SKIPPED: {name} already has an open outage ticket")
+						if name not in open_email_alerts:
+							email_ok = send_failure_email(name, "DHCP", reason, timestamp)
+							if email_ok:
+								open_email_alerts.add(name)
+								print(f"ALERT SENT: {name} DHCP resolution failure email accepted by SMTP")
+						else:
+							print(f"ALERT SKIPPED: {name} already has an open email alert")
 						continue
 
 				try:
@@ -246,10 +272,26 @@ def monitor_devices() -> None:
 					f"{timestamp} | Hostname: {name} | IP address: {ip_address} | Status: {status}"
 				)
 
+				if success:
+					open_incidents.discard(name)
+					open_email_alerts.discard(name)
+
 				if not success:
-					email_ok = send_failure_email(name, ip_address, "ICMP request timed out or host unreachable", timestamp)
-					if email_ok:
-						print(f"ALERT SENT: {name} failure email accepted by SMTP")
+					reason = "ICMP request timed out or host unreachable"
+					if name not in open_incidents:
+						ticket_ok = create_failure_ticket(name, ip_address, reason, timestamp)
+						if ticket_ok:
+							open_incidents.add(name)
+							print(f"TICKET CREATED: {name} failure was recorded in Helpdesk")
+					else:
+						print(f"TICKET SKIPPED: {name} already has an open outage ticket")
+					if name not in open_email_alerts:
+						email_ok = send_failure_email(name, ip_address, reason, timestamp)
+						if email_ok:
+							open_email_alerts.add(name)
+							print(f"ALERT SENT: {name} failure email accepted by SMTP")
+					else:
+						print(f"ALERT SKIPPED: {name} already has an open email alert")
 
 			time.sleep(PING_INTERVAL_SECONDS)
 	except FileNotFoundError as exc:
