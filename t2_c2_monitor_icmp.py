@@ -192,18 +192,30 @@ def parse_args() -> argparse.Namespace:
 		default="",
 		help="Force one device to fail by name or IP without taking it offline.",
 	)
+	parser.add_argument(
+		"--stop-after-first-failure",
+		action="store_true",
+		help="Exit immediately after handling the first detected failure.",
+	)
 	return parser.parse_args()
 
 
-def monitor_devices(one_shot: bool = False, simulate_outage_device: str = "") -> None:
+def monitor_devices(
+	one_shot: bool = False,
+	simulate_outage_device: str = "",
+	stop_after_first_failure: bool = False,
+) -> None:
 	print("Starting ICMP monitoring loop. Press Ctrl+C to stop.")
 	if one_shot:
 		print("One-shot mode enabled: script will run one pass and exit.")
+	if stop_after_first_failure:
+		print("Stop-after-first-failure mode enabled.")
 	open_incidents: set[str] = set()
 	simulated_target = simulate_outage_device.strip().lower()
 	try:
 		while True:
 			devices = load_devices()
+			stop_now = False
 
 			for device in devices:
 				name = device["name"]
@@ -226,6 +238,8 @@ def monitor_devices(one_shot: bool = False, simulate_outage_device: str = "") ->
 								print(f"INCIDENT FAILED: {name} DHCP resolution failure was not fully recorded")
 						else:
 							print(f"INCIDENT SKIPPED: {name} already has an open outage incident")
+						if stop_after_first_failure:
+							stop_now = True
 						continue
 
 				try:
@@ -262,8 +276,13 @@ def monitor_devices(one_shot: bool = False, simulate_outage_device: str = "") ->
 							print(f"INCIDENT FAILED: {name} network outage was not fully recorded")
 					else:
 						print(f"INCIDENT SKIPPED: {name} already has an open outage incident")
+					if stop_after_first_failure:
+						stop_now = True
 
-			if one_shot:
+				if stop_now:
+					break
+
+			if one_shot or stop_now:
 				print("One-shot pass complete.")
 				break
 
@@ -278,5 +297,9 @@ def monitor_devices(one_shot: bool = False, simulate_outage_device: str = "") ->
 
 if __name__ == "__main__":
 	args = parse_args()
-	monitor_devices(one_shot=args.one_shot, simulate_outage_device=args.simulate_outage_device)
+	monitor_devices(
+		one_shot=args.one_shot,
+		simulate_outage_device=args.simulate_outage_device,
+		stop_after_first_failure=args.stop_after_first_failure,
+	)
  
