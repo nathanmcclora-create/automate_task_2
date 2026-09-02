@@ -1,4 +1,5 @@
 """Continuously verify DNS settings for monitored devices, fix misconfigurations, and alert on failures."""
+"""t2_c4_create_dns_email_break_fix.py must be run while t2_c4_1_monitor_dns.py is running to generate the email and ticket."""
 
 from __future__ import annotations
 

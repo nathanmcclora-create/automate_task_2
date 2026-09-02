@@ -1,4 +1,7 @@
 """Break and fix DNS settings, send stakeholder emails, and manage Helpdesk ticket lifecycle."""
+"""Use this script to test the DNS alert workflow, including email and ticket creation and closure."""
+"""t2_c4_1_monitor_dns.py must be running to generate the email and ticket."""
+
 
 from __future__ import annotations
 
