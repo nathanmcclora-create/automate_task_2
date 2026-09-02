@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import importlib.util
 import ipaddress
 import os
 import re
-import shlex
 import smtplib
 import socket
-import subprocess
+import threading
 import time
 from datetime import datetime
 from email.message import EmailMessage
@@ -22,7 +22,7 @@ CSV_CANDIDATES = (
     Path(__file__).with_name("network_device.csv"),
     Path(__file__).with_name("network_devices.csv"),
 )
-PING_INTERVAL_SECONDS = 30
+PING_INTERVAL_SECONDS = 15
 CONSOLE_HOST = "127.0.0.1"
 CONSOLE_TIMEOUT_SECONDS = 5
 VNC_PORT_RANGE = range(5900, 6000)
@@ -75,7 +75,7 @@ def load_devices() -> list[dict[str, str]]:
                 continue
 
             address = (row.get("Device Address") or "").strip()
-            if not address or address.lower() in {"dhcp", "none"}:
+            if not address or address.lower() == "none":
                 continue
 
             devices.append(
@@ -89,6 +89,33 @@ def load_devices() -> list[dict[str, str]]:
                 }
             )
     return devices
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Monitor DNS settings, alert on misconfiguration, and auto-correct to internal DNS."
+    )
+    parser.add_argument(
+        "--one-shot",
+        action="store_true",
+        help="Run one DNS inspection pass and exit.",
+    )
+    parser.add_argument(
+        "--with-icmp",
+        action="store_true",
+        help="Run DNS monitoring concurrently with t2_c2_monitor_icmp.py logic.",
+    )
+    parser.add_argument(
+        "--icmp-stop-after-first-failure",
+        action="store_true",
+        help="When used with --with-icmp, stop ICMP monitor after first handled failure.",
+    )
+    parser.add_argument(
+        "--icmp-simulate-outage-device",
+        default="",
+        help="When used with --with-icmp, force one ICMP outage by device name or IP.",
+    )
+    return parser.parse_args()
 
 
 def resolve_dhcp_ip(device: dict[str, str]) -> tuple[str, str]:
@@ -192,6 +219,12 @@ def send_dns_email(device_name: str, ip_address: str, detected_dns: str, expecte
         return False
 
 
+def canonical_dns(dns_values: list[str]) -> str:
+    if not dns_values:
+        return "None"
+    return ", ".join(sorted(set(dns_values)))
+
+
 def check_dns_for_device(device: dict[str, str]) -> tuple[bool, str, str, str]:
     """Return success flag, current_dns, expected_dns, and reason for a device."""
     name = device["name"]
@@ -204,23 +237,48 @@ def check_dns_for_device(device: dict[str, str]) -> tuple[bool, str, str, str]:
     }
 
     current_dns = DNS_FIXER.read_dns_settings(device_for_dns)
+    detected_dns = canonical_dns(current_dns)
     expected_dns = ", ".join(sorted(APPROVED_DNS))
 
     if current_dns and set(current_dns) == APPROVED_DNS:
         ok, _ = DNS_FIXER.verify_dns(device_for_dns)
         if ok:
-            return True, ", ".join(current_dns), expected_dns, ""
-        return False, ", ".join(current_dns), expected_dns, "DNS verification failed"
+            return True, detected_dns, expected_dns, ""
+        return False, detected_dns, expected_dns, "DNS verification failed"
 
     if not current_dns:
         return False, "None", expected_dns, "No DNS server configured"
 
-    return False, ", ".join(current_dns), expected_dns, "DNS does not match approved internal DNS"
+    return False, detected_dns, expected_dns, "DNS does not match approved internal DNS"
 
 
-def monitor_dns_configuration() -> None:
+def start_icmp_monitor_in_background(
+    one_shot: bool = False,
+    simulate_outage_device: str = "",
+    stop_after_first_failure: bool = False,
+) -> threading.Thread:
+    from t2_c2_monitor_icmp import monitor_devices as monitor_icmp_devices
+
+    thread = threading.Thread(
+        target=monitor_icmp_devices,
+        kwargs={
+            "one_shot": one_shot,
+            "simulate_outage_device": simulate_outage_device,
+            "stop_after_first_failure": stop_after_first_failure,
+        },
+        name="icmp-monitor-thread",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def monitor_dns_configuration(one_shot: bool = False) -> None:
     print("Starting DNS monitoring loop. Press Ctrl+C to stop.")
+    if one_shot:
+        print("One-shot mode enabled: script will run one DNS pass and exit.")
     open_alerts: set[str] = set()
+    last_detected_dns: dict[str, str] = {}
     try:
         while True:
             devices = load_devices()
@@ -228,26 +286,38 @@ def monitor_dns_configuration() -> None:
                 name, context = build_device_context(row)
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 ip_address = context["address"]
+                should_alert = False
 
                 if context.get("_error"):
                     status = "FAIL"
+                    detected_dns = "Unknown"
                     print(f"{timestamp} | Hostname: {name} | IP address: DHCP | Status: {status}")
-                    if name not in open_alerts:
-                        email_ok = send_dns_email(name, "DHCP", "Unknown", ", ".join(sorted(APPROVED_DNS)), timestamp)
+                    previous_dns = last_detected_dns.get(name)
+                    if previous_dns != detected_dns:
+                        should_alert = True
+                    if name not in open_alerts or should_alert:
+                        email_ok = send_dns_email(name, "DHCP", detected_dns, ", ".join(sorted(APPROVED_DNS)), timestamp)
                         if email_ok:
                             open_alerts.add(name)
                             print(f"ALERT SENT: {name} DHCP resolution failed. DNS check skipped.")
+                    last_detected_dns[name] = detected_dns
                     continue
 
                 ok, detected_dns, expected_dns, reason = check_dns_for_device(context)
-                status = "SUCCESS" if ok else "FAIL"
+                previous_dns = last_detected_dns.get(name)
+                dns_changed = previous_dns is not None and previous_dns != detected_dns
+                status = "SUCCESS" if ok and not dns_changed else "FAIL"
                 print(f"{timestamp} | Hostname: {name} | IP address: {ip_address} | Status: {status}")
+                last_detected_dns[name] = detected_dns
 
-                if ok:
+                if ok and not dns_changed:
                     open_alerts.discard(name)
                     continue
 
-                if name not in open_alerts:
+                if dns_changed and not reason:
+                    reason = "DNS setting changed since previous inspection"
+
+                if name not in open_alerts or dns_changed:
                     send_dns_email(name, ip_address, detected_dns, expected_dns, timestamp)
                     open_alerts.add(name)
                     print(f"ALERT SENT: {name} DNS configuration alert emailed to administrator")
@@ -266,6 +336,10 @@ def monitor_dns_configuration() -> None:
                 else:
                     print(f"ALERT SKIPPED: {name} already has an open DNS misconfiguration alert")
 
+            if one_shot:
+                print("One-shot DNS pass complete.")
+                break
+
             time.sleep(PING_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         print("DNS monitoring stopped by user.")
@@ -274,4 +348,12 @@ def monitor_dns_configuration() -> None:
 
 
 if __name__ == "__main__":
-    monitor_dns_configuration()
+    args = parse_args()
+    if args.with_icmp:
+        start_icmp_monitor_in_background(
+            one_shot=args.one_shot,
+            simulate_outage_device=args.icmp_simulate_outage_device,
+            stop_after_first_failure=args.icmp_stop_after_first_failure,
+        )
+        print("ICMP monitor started in background thread.")
+    monitor_dns_configuration(one_shot=args.one_shot)
