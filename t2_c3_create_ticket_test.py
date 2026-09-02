@@ -1,4 +1,5 @@
 """Send a network-unavailable SMTP email and create a Helpdesk API ticket."""
+"""Must have t2_monitor_icmp.py running to generate the email and ticket."""
 
 from __future__ import annotations
 
