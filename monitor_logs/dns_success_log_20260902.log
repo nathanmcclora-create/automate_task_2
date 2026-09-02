@@ -92,3 +92,5 @@
 2026-09-02 04:37:00 | Hostname: PC4 | IP address: 192.168.10.102 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
 2026-09-02 04:37:02 | Hostname: SVR1 | IP address: 192.168.20.210 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
 2026-09-02 04:37:04 | Hostname: SVR2 | IP address: 192.168.30.210 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
+2026-09-02 04:37:21 | Hostname: API | IP address: 10.10.10.200 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
+2026-09-02 04:37:22 | Hostname: DB | IP address: 10.10.10.210 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
