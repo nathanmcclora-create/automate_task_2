@@ -1,6 +1,7 @@
-"""Log successful DNS checks while DNS monitoring is running."""
-"""Run this script while t2_c4_1_monitor_dns.py is running to log successful DNS checks."""
-"""Start DNS monitoring first, then run this script to log successful DNS checks, in another terminal."""
+"""Log successful DNS checks while DNS monitoring is running.
+
+Run this script in a separate terminal while t2_c4_1_monitor_dns.py is active.
+"""
 
 
 from __future__ import annotations
