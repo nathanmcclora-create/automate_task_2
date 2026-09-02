@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
-import json
 import ipaddress
-import os
 import re
-import smtplib
 import socket
 import subprocess
 import time
 from datetime import datetime
-from email.message import EmailMessage
 from pathlib import Path
 
-from t2_c3_create_ticket import create_ticket
+from t2_c3_create_ticket_test import submit_network_unavailable_incident
 
 
 CSV_CANDIDATES = (
@@ -30,12 +27,6 @@ VNC_PORT_RANGE = range(5900, 6000)
 
 DHCP_USERNAME = "ubuntu"
 DHCP_PASSWORD = "ubuntu"
-
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.d522.wgu.internal")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "1025"))
-SMTP_TIMEOUT_SECONDS = 10
-FROM_ADDRESS = os.getenv("ALERT_FROM", "network-monitoring@localdomain")
-TO_ADDRESS = os.getenv("ALERT_TO", "stakeholders@localdomain")
 
 
 def should_exclude(device_name: str) -> bool:
@@ -189,46 +180,27 @@ def ping_host(ip_address: str) -> bool:
 	return result.returncode == 0
 
 
-def send_failure_email(device_name: str, ip_address: str, reason: str, timestamp: str) -> bool:
-	message = EmailMessage()
-	message["Subject"] = f"Network Device Unavailable: {device_name} ({ip_address})"
-	message["From"] = FROM_ADDRESS
-	message["To"] = TO_ADDRESS
-	message.set_content(
-		"Dear Network Administrator,\n\n"
-		"This is an automated notification that the following network device is currently unavailable:\n\n"
-		f"Device Name: {device_name}\n"
-		f"IP Address: {ip_address}\n"
-		f"Last Checked: {timestamp}\n\n"
-		"Please investigate this issue at your earliest convenience.\n\n"
-		"Best regards,\n"
-		"Network Monitoring System\n"
+def parse_args() -> argparse.Namespace:
+	parser = argparse.ArgumentParser(description="Monitor devices with ICMP and auto-create outage incidents.")
+	parser.add_argument(
+		"--one-shot",
+		action="store_true",
+		help="Run one monitoring pass and exit.",
 	)
-
-	try:
-		with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
-			server.ehlo()
-			server.send_message(message)
-		return True
-	except (OSError, smtplib.SMTPException) as exc:
-		print(f"EMAIL FAILED: {device_name} ({ip_address}) - {exc}")
-		return False
+	parser.add_argument(
+		"--simulate-outage-device",
+		default="",
+		help="Force one device to fail by name or IP without taking it offline.",
+	)
+	return parser.parse_args()
 
 
-def create_failure_ticket(device_name: str, ip_address: str, reason: str, timestamp: str) -> bool:
-	"""Create a helpdesk ticket for a failed device check and print the API response."""
-	status, response = create_ticket(device_name, ip_address, reason)
-	success = 200 <= status < 300 and isinstance(response, dict) and "id" in response
-	result = "SUCCESS" if success else "FAILED"
-	print(f"{result}: Ticket creation for {device_name} ({ip_address}) - HTTP {status}")
-	print(json.dumps(response, indent=2))
-	return success
-
-
-def monitor_devices() -> None:
+def monitor_devices(one_shot: bool = False, simulate_outage_device: str = "") -> None:
 	print("Starting ICMP monitoring loop. Press Ctrl+C to stop.")
+	if one_shot:
+		print("One-shot mode enabled: script will run one pass and exit.")
 	open_incidents: set[str] = set()
-	open_email_alerts: set[str] = set()
+	simulated_target = simulate_outage_device.strip().lower()
 	try:
 		while True:
 			devices = load_devices()
@@ -246,19 +218,14 @@ def monitor_devices() -> None:
 						status = "FAIL"
 						print(f"{timestamp} | Hostname: {name} | IP address: DHCP | Status: {status}")
 						if name not in open_incidents:
-							ticket_ok = create_failure_ticket(name, "DHCP", reason, timestamp)
-							if ticket_ok:
+							incident_ok = submit_network_unavailable_incident(name, "DHCP", timestamp=timestamp)
+							if incident_ok:
 								open_incidents.add(name)
-								print(f"TICKET CREATED: {name} DHCP resolution failure was recorded in Helpdesk")
+								print(f"INCIDENT CREATED: {name} DHCP resolution failure was recorded")
+							else:
+								print(f"INCIDENT FAILED: {name} DHCP resolution failure was not fully recorded")
 						else:
-							print(f"TICKET SKIPPED: {name} already has an open outage ticket")
-						if name not in open_email_alerts:
-							email_ok = send_failure_email(name, "DHCP", reason, timestamp)
-							if email_ok:
-								open_email_alerts.add(name)
-								print(f"ALERT SENT: {name} DHCP resolution failure email accepted by SMTP")
-						else:
-							print(f"ALERT SKIPPED: {name} already has an open email alert")
+							print(f"INCIDENT SKIPPED: {name} already has an open outage incident")
 						continue
 
 				try:
@@ -267,6 +234,16 @@ def monitor_devices() -> None:
 					print("ERROR: ping command not available on this system.")
 					return
 
+				simulated_outage = bool(
+					simulated_target
+					and (name.lower() == simulated_target or ip_address.lower() == simulated_target)
+				)
+				if simulated_outage:
+					success = False
+					print(
+						f"SIMULATION: Forcing outage for {name} ({ip_address}) via --simulate-outage-device."
+					)
+
 				status = "SUCCESS" if success else "FAIL"
 				print(
 					f"{timestamp} | Hostname: {name} | IP address: {ip_address} | Status: {status}"
@@ -274,24 +251,21 @@ def monitor_devices() -> None:
 
 				if success:
 					open_incidents.discard(name)
-					open_email_alerts.discard(name)
 
 				if not success:
-					reason = "ICMP request timed out or host unreachable"
 					if name not in open_incidents:
-						ticket_ok = create_failure_ticket(name, ip_address, reason, timestamp)
-						if ticket_ok:
+						incident_ok = submit_network_unavailable_incident(name, ip_address, timestamp=timestamp)
+						if incident_ok:
 							open_incidents.add(name)
-							print(f"TICKET CREATED: {name} failure was recorded in Helpdesk")
+							print(f"INCIDENT CREATED: {name} network outage was recorded")
+						else:
+							print(f"INCIDENT FAILED: {name} network outage was not fully recorded")
 					else:
-						print(f"TICKET SKIPPED: {name} already has an open outage ticket")
-					if name not in open_email_alerts:
-						email_ok = send_failure_email(name, ip_address, reason, timestamp)
-						if email_ok:
-							open_email_alerts.add(name)
-							print(f"ALERT SENT: {name} failure email accepted by SMTP")
-					else:
-						print(f"ALERT SKIPPED: {name} already has an open email alert")
+						print(f"INCIDENT SKIPPED: {name} already has an open outage incident")
+
+			if one_shot:
+				print("One-shot pass complete.")
+				break
 
 			time.sleep(PING_INTERVAL_SECONDS)
 	except FileNotFoundError as exc:
@@ -303,5 +277,6 @@ def monitor_devices() -> None:
 
 
 if __name__ == "__main__":
-	monitor_devices()
+	args = parse_args()
+	monitor_devices(one_shot=args.one_shot, simulate_outage_device=args.simulate_outage_device)
  
