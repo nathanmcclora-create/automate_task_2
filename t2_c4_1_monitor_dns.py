@@ -9,6 +9,7 @@ import argparse
 import csv
 import importlib.util
 import ipaddress
+import json
 import os
 import re
 import smtplib
@@ -19,6 +20,8 @@ from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 CSV_CANDIDATES = (
@@ -37,6 +40,11 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "1025"))
 SMTP_TIMEOUT_SECONDS = 10
 FROM_ADDRESS = os.getenv("DNS_ALERT_FROM", "network-monitoring@localdomain")
 TO_ADDRESS = os.getenv("DNS_ALERT_TO", "stakeholders@localdomain")
+
+API_HOST = os.getenv("DNS_TICKET_API_HOST", "api.d522.wgu.internal")
+API_PORT = int(os.getenv("DNS_TICKET_API_PORT", "5000"))
+API_TOKEN = os.getenv("DNS_TICKET_API_TOKEN", "vGkbXkGLqQSo7YLflp9DutuG8st4xdPPF7wnTcwB0FE")
+API_BASE = f"http://{API_HOST}:{API_PORT}/api/tickets"
 
 
 def load_dns_module() -> Any:
@@ -214,12 +222,154 @@ def send_dns_email(device_name: str, ip_address: str, detected_dns: str, expecte
 
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
-            server.ehlo()
-            server.send_message(message)
+            code, banner = server.ehlo()
+            print(f"SMTP EHLO response: {code} {banner.decode(errors='replace')}")
+            failures = server.send_message(message)
+            if failures:
+                print("SMTP send failures:")
+                print(json.dumps(failures, indent=2))
+                print("Verification: DNS alert email sent = False")
+                return False
+        print(f"SMTP verification: Email accepted for subject '{message['Subject']}'")
+        print("Verification: DNS alert email sent = True")
         return True
     except (OSError, smtplib.SMTPException) as exc:
         print(f"EMAIL FAILED: {device_name} ({ip_address}) - {exc}")
+        print("Verification: DNS alert email sent = False")
         return False
+
+
+def send_dns_correction_email(device_name: str, ip_address: str, expected_dns: str, timestamp: str) -> bool:
+    message = EmailMessage()
+    message["Subject"] = f"DNS Configuration Restored: {device_name} ({ip_address})"
+    message["From"] = FROM_ADDRESS
+    message["To"] = TO_ADDRESS
+    message.set_content(
+        "Dear Network Administrator,\n\n"
+        "The DNS configuration issue previously detected on the following device has been automatically corrected:\n\n"
+        f"Device Name: {device_name}\n"
+        f"IP Address: {ip_address}\n"
+        f"Corrected DNS Setting: {expected_dns}\n"
+        f"Time Corrected: {timestamp}\n\n"
+        "No further action is required at this time.\n\n"
+        "Best regards,\n"
+        "Network Monitoring System"
+    )
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
+            code, banner = server.ehlo()
+            print(f"SMTP EHLO response: {code} {banner.decode(errors='replace')}")
+            failures = server.send_message(message)
+            if failures:
+                print("SMTP send failures:")
+                print(json.dumps(failures, indent=2))
+                print("Verification: DNS correction email sent = False")
+                return False
+        print(f"SMTP verification: Email accepted for subject '{message['Subject']}'")
+        print("Verification: DNS correction email sent = True")
+        return True
+    except (OSError, smtplib.SMTPException) as exc:
+        print(f"EMAIL FAILED: {device_name} ({ip_address}) - {exc}")
+        print("Verification: DNS correction email sent = False")
+        return False
+
+
+def api_request(method: str, path: str, payload: dict[str, object] | None = None) -> tuple[int, object]:
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = Request(
+        f"{API_BASE}{path}",
+        data=body,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {API_TOKEN}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8")
+            parsed = json.loads(raw) if raw else {}
+            return response.status, parsed
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed_error = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed_error = {"error": raw}
+        return exc.code, parsed_error
+    except URLError as exc:
+        raise RuntimeError(f"Could not connect to Helpdesk API: {exc.reason}") from exc
+
+
+def create_dns_ticket(device: dict[str, str], detected_dns: str, expected_dns: str, timestamp: str) -> tuple[bool, int | None]:
+    payload: dict[str, object] = {
+        "title": f"DNS configuration alert: {device['name']} ({device['address']})",
+        "description": (
+            "DNS misconfiguration detected and alert email sent.\n\n"
+            f"Device Name: {device['name']}\n"
+            f"IP Address: {device['address']}\n"
+            f"Detected DNS Setting: {detected_dns}\n"
+            f"Expected DNS Setting: {expected_dns}\n"
+            f"Time Detected: {timestamp}"
+        ),
+        "priority": "medium",
+    }
+
+    try:
+        status, response = api_request("POST", "", payload)
+    except RuntimeError as exc:
+        print(f"TICKET API ERROR: {exc}")
+        print("Verification: ticket created = False")
+        return False, None
+
+    print(f"Ticket create HTTP status: {status}")
+    print("Ticket create response:")
+    print(json.dumps(response, indent=2))
+
+    success = 200 <= status < 300 and isinstance(response, dict) and "id" in response
+    print(f"Verification: ticket created = {success}")
+    if not success:
+        return False, None
+    return True, int(response["id"])
+
+
+def close_dns_ticket(ticket_id: int, corrected_dns: str, timestamp: str) -> bool:
+    payloads = [
+        {"status": "closed", "resolution": f"DNS corrected to {corrected_dns} at {timestamp}"},
+        {"status": "resolved", "resolution": f"DNS corrected to {corrected_dns} at {timestamp}"},
+    ]
+    attempts = [
+        ("PATCH", f"/{ticket_id}"),
+        ("PUT", f"/{ticket_id}"),
+        ("POST", f"/{ticket_id}/close"),
+    ]
+
+    last_status = 0
+    last_response: object = {"error": "No close attempt made"}
+    for method, path in attempts:
+        for payload in payloads:
+            try:
+                status, response = api_request(method, path, payload)
+            except RuntimeError as exc:
+                print(f"TICKET API ERROR: {exc}")
+                print("Verification: ticket closed = False")
+                return False
+            last_status, last_response = status, response
+            if 200 <= status < 300:
+                print(f"Ticket close HTTP status: {status}")
+                print("Ticket close response:")
+                print(json.dumps(response, indent=2))
+                print("Verification: ticket closed = True")
+                return True
+
+    print(f"Ticket close HTTP status: {last_status}")
+    print("Ticket close response:")
+    print(json.dumps(last_response, indent=2))
+    print("Verification: ticket closed = False")
+    return False
 
 
 def canonical_dns(dns_values: list[str]) -> str:
@@ -281,6 +431,7 @@ def monitor_dns_configuration(one_shot: bool = False) -> None:
     if one_shot:
         print("One-shot mode enabled: script will run one DNS pass and exit.")
     open_alerts: set[str] = set()
+    open_tickets: dict[str, int] = {}
     last_detected_dns: dict[str, str] = {}
     try:
         while True:
@@ -309,24 +460,38 @@ def monitor_dns_configuration(one_shot: bool = False) -> None:
                 ok, detected_dns, expected_dns, reason = check_dns_for_device(context)
                 previous_dns = last_detected_dns.get(name)
                 dns_changed = previous_dns is not None and previous_dns != detected_dns
-                status = "SUCCESS" if ok and not dns_changed else "FAIL"
+                status = "SUCCESS" if ok else "FAIL"
                 print(f"{timestamp} | Hostname: {name} | IP address: {ip_address} | Status: {status}")
                 last_detected_dns[name] = detected_dns
 
-                if ok and not dns_changed:
-                    open_alerts.discard(name)
+                if ok:
+                    if name in open_alerts:
+                        fixed_email_ok = send_dns_correction_email(name, ip_address, expected_dns, timestamp)
+                        ticket_id = open_tickets.get(name)
+                        if ticket_id is not None:
+                            close_dns_ticket(ticket_id, expected_dns, timestamp)
+                        if fixed_email_ok:
+                            open_alerts.discard(name)
+                            open_tickets.pop(name, None)
+                    else:
+                        open_alerts.discard(name)
                     continue
 
                 if dns_changed and not reason:
                     reason = "DNS setting changed since previous inspection"
 
                 if name not in open_alerts or dns_changed:
-                    send_dns_email(name, ip_address, detected_dns, expected_dns, timestamp)
-                    open_alerts.add(name)
+                    email_ok = send_dns_email(name, ip_address, detected_dns, expected_dns, timestamp)
+                    if email_ok:
+                        open_alerts.add(name)
                     print(f"ALERT SENT: {name} DNS configuration alert emailed to administrator")
                     print(f"Detected DNS: {detected_dns}")
                     print(f"Expected DNS: {expected_dns}")
                     print(f"Reason: {reason}")
+                    if name not in open_tickets:
+                        created, ticket_id = create_dns_ticket(context, detected_dns, expected_dns, timestamp)
+                        if created and ticket_id is not None:
+                            open_tickets[name] = ticket_id
                     # Attempt to automatically correct the misconfiguration using the provided helper.
                     try:
                         corrected = DNS_FIXER.set_internal_dns(context)
@@ -334,6 +499,15 @@ def monitor_dns_configuration(one_shot: bool = False) -> None:
                             print(f"AUTO-CORRECT: {name} DNS settings corrected.")
                             verified, _, _, _ = check_dns_for_device(context)
                             print(f"VERIFY: {name} status after correction = {'SUCCESS' if verified else 'FAIL'}")
+                            if verified:
+                                corrected_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                fixed_email_ok = send_dns_correction_email(name, ip_address, expected_dns, corrected_time)
+                                ticket_id = open_tickets.get(name)
+                                if ticket_id is not None:
+                                    close_dns_ticket(ticket_id, expected_dns, corrected_time)
+                                if fixed_email_ok:
+                                    open_alerts.discard(name)
+                                    open_tickets.pop(name, None)
                     except Exception as exc:
                         print(f"AUTO-CORRECT FAILED: {name} - {exc}")
                 else:
