@@ -189,9 +189,8 @@ def check_dns_for_device(device: dict[str, str]) -> tuple[bool, str]:
 	if not current_dns:
 		return False, "None"
 
-	matches_internal = set(current_dns) == APPROVED_DNS
-	verified, _ = DNS_FIXER.verify_dns(device) if matches_internal else (False, current_dns)
-	return verified, canonical_dns(current_dns)
+	configured_ok = set(current_dns) == APPROVED_DNS
+	return configured_ok, canonical_dns(current_dns)
 
 
 def get_log_file_path() -> Path:
@@ -201,12 +200,18 @@ def get_log_file_path() -> Path:
 
 
 def write_success_log(log_file: Path, timestamp: str, hostname: str, ip_address: str, dns_setting: str) -> None:
+	date_value, time_value = timestamp.split(" ", 1)
 	line = (
-		f"{timestamp} | Hostname: {hostname} | IP address: {ip_address} | "
-		f"Status: SUCCESS | DNS: {dns_setting}\n"
+		f"Date: {date_value} | Time: {time_value} | Device Name: {hostname} | "
+		f"IP Address: {ip_address} | Status: SUCCESS | DNS: {dns_setting}\n"
 	)
 	with log_file.open("a", encoding="utf-8") as handle:
 		handle.write(line)
+
+
+def format_status_line(timestamp: str, hostname: str, ip_address: str, status: str) -> str:
+	date_value, time_value = timestamp.split(" ", 1)
+	return f"Date: {date_value} | Time: {time_value} | Device Name: {hostname} | IP Address: {ip_address} | Status: {status}"
 
 
 def run_logging_loop(interval_seconds: int, one_shot: bool) -> None:
@@ -226,15 +231,15 @@ def run_logging_loop(interval_seconds: int, one_shot: bool) -> None:
 				ip_address = context["address"]
 
 				if context.get("_error"):
-					print(f"{timestamp} | Hostname: {name} | IP address: DHCP | Status: FAIL")
+					print(format_status_line(timestamp, name, "DHCP", "FAIL"))
 					continue
 
 				ok, detected_dns = check_dns_for_device(context)
 				if ok:
-					print(f"{timestamp} | Hostname: {name} | IP address: {ip_address} | Status: SUCCESS")
+					print(format_status_line(timestamp, name, ip_address, "SUCCESS"))
 					write_success_log(log_file, timestamp, name, ip_address, detected_dns)
 				else:
-					print(f"{timestamp} | Hostname: {name} | IP address: {ip_address} | Status: FAIL")
+					print(format_status_line(timestamp, name, ip_address, "FAIL"))
 
 			if one_shot:
 				print("One-shot pass complete.")
