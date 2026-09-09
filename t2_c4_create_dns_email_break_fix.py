@@ -10,9 +10,14 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib.util
+import ipaddress
 import json
+import re
 import smtplib
+import socket
 import sys
+import time
+from collections import OrderedDict
 from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
@@ -42,6 +47,8 @@ API_TOKEN = "vGkbXkGLqQSo7YLflp9DutuG8st4xdPPF7wnTcwB0FE"
 API_BASE = f"http://{API_HOST}:{API_PORT}/api/tickets"
 
 SSH_TIMEOUT_SECONDS = 15
+CONSOLE_HOST = "127.0.0.1"
+CONSOLE_TIMEOUT_SECONDS = 5
 DHCP_USERNAME = "ubuntu"
 DHCP_PASSWORD = "ubuntu"
 
@@ -91,6 +98,7 @@ def find_device(device_name: str) -> dict[str, str]:
 
 			return {
 				"name": name,
+				"inventory_address": address,
 				"address": address,
 				"access_port": (row.get("Access Port") or "").strip(),
 				"username": (row.get("Username") or DHCP_USERNAME).strip() or DHCP_USERNAME,
@@ -106,6 +114,85 @@ def canonical_dns(dns_values: list[str]) -> str:
 	return ", ".join(sorted(set(dns_values)))
 
 
+def unique_ipv4_values(text: str) -> list[str]:
+	values = OrderedDict()
+	for match in re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text):
+		try:
+			parsed = ipaddress.IPv4Address(match)
+		except ipaddress.AddressValueError:
+			continue
+		values[str(parsed)] = None
+	return list(values)
+
+
+def preferred_dns_servers(dns_values: list[str]) -> list[str]:
+	non_loopback = [dns_value for dns_value in dns_values if not dns_value.startswith("127.")]
+	if non_loopback:
+		return non_loopback
+	return dns_values
+
+
+def receive_console_output(console: socket.socket, pause_seconds: float = 0.4) -> str:
+	time.sleep(pause_seconds)
+	chunks: list[bytes] = []
+	while True:
+		try:
+			chunk = console.recv(4096)
+		except socket.timeout:
+			break
+		if not chunk:
+			break
+		chunks.append(chunk)
+	return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def resolve_dhcp_ip(device: dict[str, str]) -> tuple[str, str]:
+	access_port = device.get("access_port", "")
+	if not access_port:
+		return "", "Missing access port for DHCP device"
+
+	try:
+		access_port_number = int(access_port)
+	except ValueError:
+		return "", f"Invalid access port: {access_port}"
+
+	try:
+		with socket.create_connection((CONSOLE_HOST, access_port_number), timeout=CONSOLE_TIMEOUT_SECONDS) as console:
+			console.settimeout(0.5)
+			receive_console_output(console, pause_seconds=0.2)
+			console.sendall(b"\n")
+			receive_console_output(console, pause_seconds=0.2)
+			console.sendall(f"{DHCP_USERNAME}\n".encode())
+			receive_console_output(console, pause_seconds=0.2)
+			console.sendall(f"{DHCP_PASSWORD}\n".encode())
+			receive_console_output(console, pause_seconds=0.6)
+			console.sendall(b"hostname -I\n")
+			output = receive_console_output(console, pause_seconds=0.8)
+	except OSError as exc:
+		return "", str(exc)
+
+	for candidate in unique_ipv4_values(output):
+		if candidate.startswith("127."):
+			continue
+		return candidate, ""
+	return "", "No IPv4 address found in console output"
+
+
+def resolve_runtime_device(device: dict[str, str]) -> dict[str, str]:
+	runtime_device = dict(device)
+	if runtime_device["address"].lower() != "dhcp":
+		return runtime_device
+
+	runtime_ip, error = resolve_dhcp_ip(runtime_device)
+	if not runtime_ip:
+		raise RuntimeError(
+			f"Could not resolve current IP for DHCP device {runtime_device['name']}: {error}"
+		)
+	runtime_device["address"] = runtime_ip
+	runtime_device["resolved_from_dhcp"] = "true"
+	return runtime_device
+
+
 def connect_ssh(device: dict[str, str]) -> paramiko.SSHClient:
 	client = paramiko.SSHClient()
 	client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -118,6 +205,24 @@ def connect_ssh(device: dict[str, str]) -> paramiko.SSHClient:
 		auth_timeout=SSH_TIMEOUT_SECONDS,
 	)
 	return client
+
+
+def read_live_dns_settings(device: dict[str, str]) -> list[str]:
+	client = connect_ssh(device)
+	try:
+		_, stdout, _ = client.exec_command(
+			"sh -lc 'cat /etc/resolv.conf 2>/dev/null; printf '\\n'; resolvectl dns 2>/dev/null; printf '\\n'; systemd-resolve --status 2>/dev/null'",
+			timeout=SSH_TIMEOUT_SECONDS,
+		)
+		output = stdout.read().decode("utf-8", errors="replace")
+		return preferred_dns_servers(unique_ipv4_values(output))
+	finally:
+		client.close()
+
+
+def verify_live_dns(device: dict[str, str]) -> tuple[bool, list[str]]:
+	dns_values = read_live_dns_settings(device)
+	return set(dns_values) == APPROVED_DNS, dns_values
 
 
 def run_remote_sudo(client: paramiko.SSHClient, password: str, command: str) -> tuple[int, str, str]:
@@ -208,12 +313,16 @@ def send_email(subject: str, body: str) -> bool:
 		with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
 			code, banner = server.ehlo()
 			print(f"SMTP EHLO response: {code} {banner.decode(errors='replace')}")
+			print(f"SMTP capabilities: {server.esmtp_features}")
 			failures = server.send_message(message)
 			if failures:
 				print("SMTP send failures:")
 				print(json.dumps(failures, indent=2))
 				return False
-		print(f"SMTP verification: Email accepted for subject '{subject}'")
+		print(
+			"SMTP verification: Email accepted by "
+			f"{SMTP_HOST}:{SMTP_PORT} for subject '{subject}'"
+		)
 		return True
 	except (OSError, smtplib.SMTPException) as exc:
 		print(f"SMTP ERROR: {exc}", file=sys.stderr)
@@ -267,6 +376,10 @@ def create_dns_ticket(device: dict[str, str], detected_dns: str, expected_dns: s
 	return success, status, response
 
 
+def get_ticket(ticket_id: int) -> tuple[int, object]:
+	return api_request("GET", f"/{ticket_id}")
+
+
 def close_dns_ticket(ticket_id: int, corrected_dns: str, timestamp: str) -> tuple[bool, int, object]:
 	payloads = [
 		{"status": "closed", "resolution": f"DNS corrected to {corrected_dns} at {timestamp}"},
@@ -302,18 +415,24 @@ def main() -> int:
 
 	try:
 		device = find_device(args.device_name)
-	except (FileNotFoundError, ValueError) as exc:
+		runtime_device = resolve_runtime_device(device)
+	except (FileNotFoundError, ValueError, RuntimeError) as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
 		return 1
 
-	print(f"Target device: {device['name']} ({device['address']})")
+	print(f"Target device: {device['name']} ({runtime_device['address']})")
+	if device["address"].lower() == "dhcp":
+		print(
+			f"Resolved DHCP inventory address for {device['name']} via console port "
+			f"{device['access_port']}: {runtime_device['address']}"
+		)
 
 	print("Step 1/6: Break DNS settings using Test_DNS/break_dns.bin")
-	if not run_dns_binary(device, BREAK_BIN):
+	if not run_dns_binary(runtime_device, BREAK_BIN):
 		print("ERROR: Failed to execute break_dns.bin", file=sys.stderr)
 		return 1
 
-	detected_dns_list = DNS_FIXER.read_dns_settings(device)
+	detected_dns_list = read_live_dns_settings(runtime_device)
 	detected_dns = canonical_dns(detected_dns_list)
 	expected_dns = ", ".join(sorted(APPROVED_DNS))
 	mismatch = set(detected_dns_list) != APPROVED_DNS
@@ -324,10 +443,10 @@ def main() -> int:
 
 	if not mismatch:
 		print("break_dns.bin did not produce a DNS mismatch; attempting fallback break command for validation.")
-		if not force_break_dns_fallback(device):
+		if not force_break_dns_fallback(runtime_device):
 			print("ERROR: Could not force DNS mismatch for alert workflow test.", file=sys.stderr)
 			return 1
-		detected_dns_list = DNS_FIXER.read_dns_settings(device)
+		detected_dns_list = read_live_dns_settings(runtime_device)
 		detected_dns = canonical_dns(detected_dns_list)
 		mismatch = set(detected_dns_list) != APPROVED_DNS
 		print(f"Detected DNS after fallback break: {detected_dns}")
@@ -336,12 +455,12 @@ def main() -> int:
 			print("ERROR: DNS mismatch still not detected after fallback.", file=sys.stderr)
 			return 1
 
-	subject_alert = f"DNS Configuration Alert: {device['name']} ({device['address']})"
+	subject_alert = f"DNS Configuration Alert: {runtime_device['name']} ({runtime_device['address']})"
 	body_alert = (
 		"Dear Network Administrator,\n\n"
 		"This is an automated alert that the DNS configuration for the following device has been altered from the expected settings:\n\n"
-		f"Device Name: {device['name']}\n"
-		f"IP Address: {device['address']}\n"
+		f"Device Name: {runtime_device['name']}\n"
+		f"IP Address: {runtime_device['address']}\n"
 		f"Detected DNS Setting: {detected_dns}\n"
 		f"Expected DNS Setting: {expected_dns}\n"
 		f"Time Detected: {timestamp_detected}\n\n"
@@ -355,9 +474,10 @@ def main() -> int:
 	print(f"Verification: misconfiguration email sent = {alert_email_ok}")
 	if not alert_email_ok:
 		return 1
+	print("SMTP server accepted the alert email; proceeding to ticket creation.")
 
 	print("Step 3/6: Create Helpdesk ticket for DNS misconfiguration")
-	created, create_status, create_response = create_dns_ticket(device, detected_dns, expected_dns, timestamp_detected)
+	created, create_status, create_response = create_dns_ticket(runtime_device, detected_dns, expected_dns, timestamp_detected)
 	print(f"Ticket create HTTP status: {create_status}")
 	print("Ticket create response:")
 	print(json.dumps(create_response, indent=2))
@@ -366,13 +486,17 @@ def main() -> int:
 		return 1
 
 	ticket_id = int(create_response["id"])
+	verify_create_status, verify_create_response = get_ticket(ticket_id)
+	print(f"Ticket fetch-after-create HTTP status: {verify_create_status}")
+	print("Ticket fetch-after-create response:")
+	print(json.dumps(verify_create_response, indent=2))
 
 	print("Step 4/6: Fix DNS settings using Test_DNS/fix_dns.bin")
-	if not run_dns_binary(device, FIX_BIN):
+	if not run_dns_binary(runtime_device, FIX_BIN):
 		print("ERROR: Failed to execute fix_dns.bin", file=sys.stderr)
 		return 1
 
-	ok, final_dns_list = DNS_FIXER.verify_dns(device)
+	ok, final_dns_list = verify_live_dns(runtime_device)
 	final_dns = canonical_dns(final_dns_list)
 	timestamp_fixed = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 	print(f"Detected DNS after fix: {final_dns}")
@@ -380,10 +504,10 @@ def main() -> int:
 
 	if not ok:
 		print("fix_dns.bin did not restore approved DNS settings; attempting fallback fix command.")
-		if not force_fix_dns_fallback(device):
+		if not force_fix_dns_fallback(runtime_device):
 			print("ERROR: Could not force DNS correction.", file=sys.stderr)
 			return 1
-		ok, final_dns_list = DNS_FIXER.verify_dns(device)
+		ok, final_dns_list = verify_live_dns(runtime_device)
 		final_dns = canonical_dns(final_dns_list)
 		timestamp_fixed = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 		print(f"Detected DNS after fallback fix: {final_dns}")
@@ -392,12 +516,12 @@ def main() -> int:
 			print("ERROR: DNS is still not corrected after fallback fix.", file=sys.stderr)
 			return 1
 
-	subject_fixed = f"DNS Configuration Restored: {device['name']} ({device['address']})"
+	subject_fixed = f"DNS Configuration Restored: {runtime_device['name']} ({runtime_device['address']})"
 	body_fixed = (
 		"Dear Network Administrator,\n\n"
 		"The DNS configuration issue previously detected on the following device has been automatically corrected:\n\n"
-		f"Device Name: {device['name']}\n"
-		f"IP Address: {device['address']}\n"
+		f"Device Name: {runtime_device['name']}\n"
+		f"IP Address: {runtime_device['address']}\n"
 		f"Corrected DNS Setting: {expected_dns}\n"
 		f"Time Corrected: {timestamp_fixed}\n\n"
 		"No further action is required at this time.\n\n"
@@ -416,6 +540,10 @@ def main() -> int:
 	print(f"Ticket close HTTP status: {close_status}")
 	print("Ticket close response:")
 	print(json.dumps(close_response, indent=2))
+	verify_close_status, verify_close_response = get_ticket(ticket_id)
+	print(f"Ticket fetch-after-close HTTP status: {verify_close_status}")
+	print("Ticket fetch-after-close response:")
+	print(json.dumps(verify_close_response, indent=2))
 	print(f"Verification: ticket closed = {closed}")
 
 	return 0 if closed else 1
