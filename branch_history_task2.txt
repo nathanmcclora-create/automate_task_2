@@ -1,0 +1,199 @@
+commit 6d6cac8e11e56940b95d3ad2a9b48ca077ae8d1c
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Thu Sep 10 10:29:36 2026 +0000
+
+    Deleted old commit history and branch history txt files, because I'm going to be generating new ones, After my testing for the 5th time.
+
+commit 0200f9cf9a7a6feb9f5a44171464a06c2de35fb6
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Thu Sep 10 10:21:52 2026 +0000
+
+    T2_C4_Steps 1 thru 4 have been retested. Everytime I save and come back to test thecode, its incorrect, and I have to restructure it. WHAT IS GOING ON? If I save this time and rerun it and it's unsuccessful I am filing a complaint. Tsk1 ws not this confusing.
+
+commit 6bd1091c9f6e2dc9e8cf95b085c07d6238e4044d
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Thu Sep 10 08:13:30 2026 +0000
+
+    Created a new detailed-commit-history.txt file and branch_history.txt tile. Not sure which one to use for this assignment.
+
+commit e797a4f2708737f21abb2481021596d5e942b535
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Thu Sep 10 08:07:30 2026 +0000
+
+    T2_C5_Retested script. It errored out. Re-worke it to call t2_c4_1_monitor_dns_only.py script so it can run smoother.
+
+commit afff88417bf98a690d7a4f420e0a319e6c2ebd4d
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Thu Sep 10 07:49:47 2026 +0000
+
+    T2_C4_Tested code for the 4th time. It was still incorrect. Had to remove bad code and create 4 new python files to accomplish C4 for T ask 2. Retested and works. Will retest again before sending in 4th attempt.
+
+commit 231f46e37b9ba433f1e4a9d19f567a9ee39c9e90
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 9 09:59:16 2026 +0000
+
+    Detailed-commit-history.txt file  for task 2 updated and added to workload. dns_success_log_20260909.log kept updating because scipt wass not ended properly.
+
+commit 6cd9da9a6a198fa55594bafa7f7e405be0366b1a
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 9 09:52:27 2026 +0000
+
+    T2_C5_Updated the logging script and the log file in the monitor_logs folder
+
+commit b1c04d44f1627c0b7d515f2c13827193a66085f0
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 9 09:35:59 2026 +0000
+
+    T2_C4_REVISED_reworked C4 of assessment. Seemed to work and I got updated screenshots of terminal results and emails generating and sending successfully.
+
+commit a3aa804d33676445c7e0daf95fb83faff07445f0
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 9 05:15:53 2026 +0000
+
+    Added a detailed-commit-history txt file. Reworked t2_c4_1monitor_dns.py and t2_c5_monitor_log.py. Going to commit and retest to make sure the codes work as intended.
+
+commit dfb40f7519168e344696207c7fbbda35de1d7a79
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Fri Sep 4 02:59:34 2026 +0000
+
+    Changed name to make it easier for evaluators to see and verify my work for task 2.
+
+commit 1aebeba0a4034ec9327472789ad0261310acffc3
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Fri Sep 4 02:57:40 2026 +0000
+
+    REVISED_Created branch_history.txt as instructed.
+
+commit 9d0c71f9a309d2b1f72dae98361218bdf0bc3136
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Fri Sep 4 02:54:55 2026 +0000
+
+    T2_C5_REVISED_Retested script. Ran successfully. Created another log file in monitor_dns folder. The log files are stored in that folder.
+
+commit c81b67baef12932c589f85485df808efbb917902
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Fri Sep 4 02:49:22 2026 +0000
+
+    T2_C4_REVISED_removed the .bin files from the script. Script no longer relies on .bin files to function. Monitors the devices for altered DNS config successfully
+
+commit c6f84cd8fdf606cea815902579496af9993f6988
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 2 04:38:36 2026 +0000
+
+    Log File changed after final testing
+
+commit fffc14b214eaa3e2d7e48f37f6e5d3a455eaf668
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 2 04:38:09 2026 +0000
+
+    FINAL TEST_Ensured all scripts successfully work as intended
+
+commit 59dda752c890a0e933268cd75db8afd02e2ed20f
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 2 04:01:06 2026 +0000
+
+    T2_C5_Created a script that created the monitor_log folder to store log files for devices successfully checked with the correct DNS configurations.
+
+commit 4902260f2771bf3bda24f133591ac8455d53fc67
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 2 03:51:42 2026 +0000
+
+    T2_C4_added notes to step C4 to better explain these scripts must be running concurrently in order for testing to be verified successfully
+
+commit 828613e39d5fa0fdf6f483f0d36966039dfa7b78
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 2 03:41:39 2026 +0000
+
+    Changed the file name to keep the script sequentially organized.
+
+commit 53720b23422e28b1cfa6aa920bdd4a6cd3e58150
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 2 03:33:04 2026 +0000
+
+    T2_C4_Created a script that monitors the DNS Settings for devices continuously  [t2_c4_monitor_dns.py]
+    
+    Also, created a script that creates the DNS break email, fixes/repairs the DNS Settings,  and creates and sends the DNS repaired/recovered email [t2_c4_create_dns_email_break_fix.py]
+
+commit f9b2a408d5b9fa6660f7a0399ba26ed4a864e93b
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 2 02:40:02 2026 +0000
+
+    T2_C3_Shows API response successful in terminal. Must have t2_c2_monitor_icmp.py script running while t2_c3_create_ticket_test.py script is running to see verification in terminal.
+
+commit d71b19fd3bf254ae0ba07a94a2b46a5c63d6e8d8
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 2 02:26:58 2026 +0000
+
+    T2_C3_Testing complete. Email created and API http status: 201
+
+commit 19be8c4c1d9e055c1987e99fff9e189976b82454
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 2 02:08:43 2026 +0000
+
+    T2_C3_Turned this script off to continue testing.
+
+commit cfd3b89feccb168d58886f7507a0a492b3747ed8
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 2 02:07:30 2026 +0000
+
+    T2_C3_Testing to make sure the Network Device Unavailable script works as intended.
+
+commit 991bf63aa5b9273f6b2e213956ec4559fe170e6f
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Wed Sep 2 02:06:13 2026 +0000
+
+    T2_C3_Created a script that creates a ticket whenever an Email is received stating the Network device is unavailable.
+
+commit 9564f7300ebeb0b0956c50cfc1cc8bc7a64ba290
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 22:43:57 2026 +0000
+
+    T2_C4_Created a scriptto monitor DNS configs on device. Auto correct if settings change. Verify changes.
+
+commit 406777d34cff18ee86792abe416e0f9fd461b75d
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 21:53:54 2026 +0000
+
+    T2_C3_Creaed script that automatically generates a ticket in Helpdesk API. Describes reason in ticket creation.
+
+commit 5607eade8c296b63cccf91c61d0d5e4f31678388
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 21:52:01 2026 +0000
+
+    T2_C2_ Created a script to contiuously ping devices. When icmp fails,  generate an email using "Task 2 Email Templates" document.
+
+commit 2c1119732176c9f222783722b722d29c725172e0
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 20:34:20 2026 +0000
+
+    Deleted because it was empty
+
+commit fc06bb48c25e1939fdb062391d00bc56ba4a99e4
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 20:33:44 2026 +0000
+
+    T2_C1_Created a script to ping devices on network. WEBTERM in gns3 was causing an error/issue with pinging DNS config devices. had to re work the code so could work properly
+
+commit d02731daef41693cc66f78ed6a7ebbd03ad84e4b
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 20:16:59 2026 +0000
+
+    T2_B2_Created script to create backup configs for DNS1 and DNS2. Created directory and subfolder to house .txt files.
+
+commit a9da518809a37377b75d6f862eaa4120d693ea8f
+Author: nathanmcclora-create <nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 19:38:23 2026 +0000
+
+    Add files via upload
+
+commit c8edb311435d1850a2974cbeb5a523edea67650b
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 19:29:05 2026 +0000
+
+    Staged a new repository from local directory to Github for Task 2
+
+commit 415ad98997b6ab730d30ae3740c64d4870e44c5d
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 19:25:34 2026 +0000
+
+    Initial commit
