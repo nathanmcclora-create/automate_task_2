@@ -1,6 +1,6 @@
 """Log successful DNS checks while the DNS monitor workflow is running.
 
-Run this script in a separate terminal while t2_c4_1_monitor_dns.py is active.
+Run this script in a separate terminal while t2_c4_1_monitor_only_dns.py is active.
 """
 
 
@@ -11,12 +11,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from t2_c4_1_monitor_dns import inspect_device, load_devices
+from t2_c4_1_monitor_only_dns import inspect_device, load_devices
 
 
 LOG_DIR = Path(__file__).with_name("monitor_logs")
-DEFAULT_INTERVAL_SECONDS = 30
-MIN_INTERVAL_SECONDS = 15
+DEFAULT_INTERVAL_SECONDS = 45
+MIN_INTERVAL_SECONDS = 45
+MAX_INTERVAL_SECONDS = 60
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,7 +28,7 @@ def parse_args() -> argparse.Namespace:
 		"--interval-seconds",
 		type=int,
 		default=DEFAULT_INTERVAL_SECONDS,
-		help="Delay between monitoring passes to avoid excessive logging (default: 30).",
+		help="Delay between monitoring passes (must be 45-60 seconds, default: 45).",
 	)
 	parser.add_argument(
 		"--one-shot",
@@ -60,7 +61,7 @@ def format_status_line(timestamp: str, hostname: str, ip_address: str, status: s
 
 def run_logging_loop(interval_seconds: int, one_shot: bool) -> None:
 	print("Starting DNS success logger. Press Ctrl+C to stop.")
-	print("This logger mirrors DNS checks from t2_c4_1_monitor_dns.py.")
+	print("This logger mirrors DNS checks from t2_c4_1_monitor_only_dns.py.")
 	log_file = get_log_file_path()
 	print(f"Log folder ready: {LOG_DIR}")
 	print(f"Writing success checks to: {log_file}")
@@ -95,7 +96,13 @@ def run_logging_loop(interval_seconds: int, one_shot: bool) -> None:
 
 def main() -> int:
 	args = parse_args()
-	interval = max(MIN_INTERVAL_SECONDS, args.interval_seconds)
+	interval = args.interval_seconds
+	if interval < MIN_INTERVAL_SECONDS or interval > MAX_INTERVAL_SECONDS:
+		print(
+			f"Requested interval {interval} is out of range. "
+			f"Using {DEFAULT_INTERVAL_SECONDS} seconds (allowed range: {MIN_INTERVAL_SECONDS}-{MAX_INTERVAL_SECONDS})."
+		)
+		interval = DEFAULT_INTERVAL_SECONDS
 	run_logging_loop(interval_seconds=interval, one_shot=args.one_shot)
 	return 0
 
