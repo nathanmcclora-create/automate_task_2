@@ -23,8 +23,8 @@ ALERT_SCRIPT = Path(__file__).with_name("t2_c4_2_send_dns_alert_email.py")
 DNS1 = "10.10.10.10"
 DNS2 = "10.10.10.20"
 APPROVED_DNS = {DNS1, DNS2}
-CHECK_INTERVAL_SECONDS = 15
-SSH_TIMEOUT_SECONDS = 15
+CHECK_INTERVAL_SECONDS = 45
+SSH_TIMEOUT_SECONDS = 45
 CONSOLE_HOST = "127.0.0.1"
 CONSOLE_TIMEOUT_SECONDS = 5
 
@@ -280,7 +280,7 @@ def monitor_devices(interval_seconds: int, one_shot: bool = False) -> None:
     if one_shot:
         print("One-shot mode enabled.")
 
-    failure_signatures: dict[str, str] = {}
+    alert_sent_for_device: set[str] = set()
 
     while True:
         devices = load_devices()
@@ -292,11 +292,10 @@ def monitor_devices(interval_seconds: int, one_shot: bool = False) -> None:
             print_dns_result(timestamp, result)
 
             if result["status"] == "SUCCESS":
-                failure_signatures.pop(device["name"], None)
+                alert_sent_for_device.discard(device["name"])
                 continue
 
-            signature = f"{result['ip_address']}|{result['dns']}|{result['reason']}"
-            if failure_signatures.get(device["name"]) == signature:
+            if device["name"] in alert_sent_for_device:
                 continue
 
             email_sent = send_failure_email(
@@ -306,7 +305,8 @@ def monitor_devices(interval_seconds: int, one_shot: bool = False) -> None:
                 reason=result["reason"],
                 timestamp=timestamp,
             )
-            failure_signatures[device["name"]] = signature
+            if email_sent:
+                alert_sent_for_device.add(device["name"])
             print(
                 f"{timestamp} | Hostname: {result['name']} | "
                 f"Email alert: {'SENT' if email_sent else 'FAILED'}"

@@ -38,3 +38,10 @@ Date: 2026-09-10 | Time: 08:06:12 | Device Name: PC3 | IP Address: 192.168.30.10
 Date: 2026-09-10 | Time: 08:06:17 | Device Name: PC4 | IP Address: 192.168.10.102 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
 Date: 2026-09-10 | Time: 08:06:23 | Device Name: SVR1 | IP Address: 192.168.20.210 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
 Date: 2026-09-10 | Time: 08:06:24 | Device Name: SVR2 | IP Address: 192.168.30.210 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
+Date: 2026-09-10 | Time: 10:16:57 | Device Name: API | IP Address: 10.10.10.200 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
+Date: 2026-09-10 | Time: 10:16:58 | Device Name: DB | IP Address: 10.10.10.210 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
+Date: 2026-09-10 | Time: 10:16:59 | Device Name: DNS1 | IP Address: 10.10.10.10 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
+Date: 2026-09-10 | Time: 10:17:00 | Device Name: DNS2 | IP Address: 10.10.10.20 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
+Date: 2026-09-10 | Time: 10:17:01 | Device Name: PC1 | IP Address: 192.168.10.101 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
+Date: 2026-09-10 | Time: 10:17:06 | Device Name: PC2 | IP Address: 192.168.20.100 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20
+Date: 2026-09-10 | Time: 10:17:12 | Device Name: PC3 | IP Address: 192.168.30.101 | Status: SUCCESS | DNS: 10.10.10.10, 10.10.10.20

@@ -5,16 +5,13 @@ from __future__ import annotations
 import argparse
 import csv
 import ipaddress
-import os
 import re
 import shlex
-import smtplib
 import socket
 import subprocess
 import sys
 from collections import OrderedDict
 from datetime import datetime
-from email.message import EmailMessage
 from pathlib import Path
 
 import paramiko
@@ -33,13 +30,6 @@ CONSOLE_TIMEOUT_SECONDS = 5
 DEFAULT_USERNAME = "ubuntu"
 DEFAULT_PASSWORD = "ubuntu"
 
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.d522.wgu.internal")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "1025"))
-SMTP_TIMEOUT_SECONDS = 10
-FROM_ADDRESS = os.getenv("DNS_ALERT_FROM", "network-monitoring@localdomain")
-TO_ADDRESS = os.getenv("DNS_ALERT_TO", "stakeholders@localdomain")
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -55,7 +45,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-legacy-workflow",
         action="store_true",
+        default=True,
         help="Only perform fix/verify for failing devices and skip legacy break/fix workflow.",
+    )
+    parser.add_argument(
+        "--run-legacy-workflow",
+        dest="skip_legacy_workflow",
+        action="store_false",
+        help="Run the legacy break/fix workflow after remediation.",
     )
     return parser.parse_args()
 
@@ -208,22 +205,6 @@ def evaluate_dns(dns_servers: list[str]) -> tuple[str, str]:
     return "SUCCESS", "DNS points to approved DNS1/DNS2"
 
 
-def send_email(subject: str, body: str) -> bool:
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = FROM_ADDRESS
-    message["To"] = TO_ADDRESS
-    message.set_content(body)
-
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
-            server.ehlo()
-            failures = server.send_message(message)
-            return not failures
-    except (OSError, smtplib.SMTPException):
-        return False
-
-
 def send_corrected_email(device_name: str, ip_address: str, corrected_dns: str, timestamp: str) -> bool:
     if not CORRECTED_EMAIL_SCRIPT.exists():
         print(f"Corrected email script missing: {CORRECTED_EMAIL_SCRIPT}")
@@ -369,18 +350,9 @@ def fix_failed_devices() -> int:
             continue
 
         failed_count += 1
-        subject = f"DNS ALERT: {result['name']} ({result['ip_address']})"
-        body = (
-            "DNS remediation script detected a failing DNS configuration.\n\n"
-            f"Hostname: {result['name']}\n"
-            f"IP address: {result['ip_address']}\n"
-            f"Current DNS: {result['dns']}\n"
-            f"Expected DNS: {DNS1}, {DNS2}\n"
-            f"Reason: {result['reason']}\n"
-            f"Timestamp: {timestamp}\n"
+        print(
+            f"{timestamp} | Hostname: {result['name']} | DNS remediation required: {result['reason']}"
         )
-        email_sent = send_email(subject, body)
-        print(f"{timestamp} | Hostname: {result['name']} | Email alert: {'SENT' if email_sent else 'FAILED'}")
 
         runtime_ip = result["ip_address"]
         if runtime_ip in {"", "DHCP"}:
@@ -455,7 +427,9 @@ def main() -> int:
 
     remediation_code = fix_failed_devices()
 
-    if args.skip_legacy_workflow:
+    if args.skip_legacy_workflow or not LEGACY_WORKFLOW_SCRIPT.exists():
+        if not args.skip_legacy_workflow and not LEGACY_WORKFLOW_SCRIPT.exists():
+            print(f"Legacy workflow script not found: {LEGACY_WORKFLOW_SCRIPT}")
         return remediation_code
 
     workflow_code = run_legacy_break_fix_workflow(args.workflow_device_name)
