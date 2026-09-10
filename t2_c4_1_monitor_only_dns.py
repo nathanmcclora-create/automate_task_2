@@ -1,4 +1,4 @@
-"""Continuously monitor device DNS settings and email on misconfiguration."""
+"""Continuously monitor DNS settings and send email alerts for failures."""
 
 from __future__ import annotations
 
@@ -7,53 +7,44 @@ import csv
 import ipaddress
 import os
 import re
-import smtplib
 import socket
+import subprocess
+import sys
 import time
 from collections import OrderedDict
 from datetime import datetime
-from email.message import EmailMessage
 from pathlib import Path
 
 import paramiko
 
 
-CSV_CANDIDATES = (
-    Path(__file__).with_name("network_device.csv"),
-    Path(__file__).with_name("network_devices.csv"),
-)
+CSV_FILE = Path(__file__).with_name("network_devices.csv")
+ALERT_SCRIPT = Path(__file__).with_name("t2_c4_2_send_dns_alert_email.py")
 DNS1 = "10.10.10.10"
 DNS2 = "10.10.10.20"
 APPROVED_DNS = {DNS1, DNS2}
-DEFAULT_INTERVAL_SECONDS = 15
+CHECK_INTERVAL_SECONDS = 15
 SSH_TIMEOUT_SECONDS = 15
 CONSOLE_HOST = "127.0.0.1"
 CONSOLE_TIMEOUT_SECONDS = 5
 
-DHCP_USERNAME = "ubuntu"
-DHCP_PASSWORD = "ubuntu"
-
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.d522.wgu.internal")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "1025"))
-SMTP_TIMEOUT_SECONDS = 10
-FROM_ADDRESS = os.getenv("DNS_ALERT_FROM", "network-monitoring@localdomain")
-TO_ADDRESS = os.getenv("DNS_ALERT_TO", "stakeholders@localdomain")
-
+DEFAULT_USERNAME = "ubuntu"
+DEFAULT_PASSWORD = "ubuntu"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Continuously check device DNS settings and send alert emails on failures."
+        description="Monitor DNS every 15 seconds for eligible devices and email on failures."
     )
     parser.add_argument(
         "--interval",
         type=int,
-        default=DEFAULT_INTERVAL_SECONDS,
-        help="Seconds to wait between DNS checks. Default: 15",
+        default=CHECK_INTERVAL_SECONDS,
+        help="Seconds between monitoring passes (default: 15).",
     )
     parser.add_argument(
         "--one-shot",
         action="store_true",
-        help="Run a single DNS check pass and exit.",
+        help="Run one pass and exit.",
     )
     return parser.parse_args()
 
@@ -63,16 +54,9 @@ def should_exclude(device_name: str) -> bool:
     return name.startswith("router") or name.startswith("sw") or "switch" in name or name == "smtp"
 
 
-def get_csv_path() -> Path:
-    for candidate in CSV_CANDIDATES:
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError("Could not find network_device.csv or network_devices.csv in the script directory.")
-
-
 def load_devices() -> list[dict[str, str]]:
     devices: list[dict[str, str]] = []
-    with get_csv_path().open(newline="", encoding="utf-8") as csv_file:
+    with CSV_FILE.open(newline="", encoding="utf-8") as csv_file:
         for row in csv.DictReader(csv_file):
             name = (row.get("Device Name") or "").strip()
             if should_exclude(name):
@@ -87,29 +71,11 @@ def load_devices() -> list[dict[str, str]]:
                     "name": name,
                     "inventory_address": inventory_address,
                     "access_port": (row.get("Access Port") or "").strip(),
-                    "username": (row.get("Username") or DHCP_USERNAME).strip() or DHCP_USERNAME,
-                    "password": (row.get("Password") or DHCP_PASSWORD).strip() or DHCP_PASSWORD,
+                    "username": (row.get("Username") or DEFAULT_USERNAME).strip() or DEFAULT_USERNAME,
+                    "password": (row.get("Password") or DEFAULT_PASSWORD).strip() or DEFAULT_PASSWORD,
                 }
             )
     return devices
-
-
-def unique_ipv4_values(text: str) -> list[str]:
-    values = OrderedDict()
-    for match in re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text):
-        try:
-            parsed = ipaddress.IPv4Address(match)
-        except ipaddress.AddressValueError:
-            continue
-        values[str(parsed)] = None
-    return list(values)
-
-
-def preferred_dns_servers(dns_servers: list[str]) -> list[str]:
-    non_loopback_servers = [server for server in dns_servers if not server.startswith("127.")]
-    if non_loopback_servers:
-        return non_loopback_servers
-    return dns_servers
 
 
 def receive_console_output(console: socket.socket, pause_seconds: float = 0.4) -> str:
@@ -126,6 +92,17 @@ def receive_console_output(console: socket.socket, pause_seconds: float = 0.4) -
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 
+def unique_ipv4_values(text: str) -> list[str]:
+    values = OrderedDict()
+    for match in re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text):
+        try:
+            parsed = ipaddress.IPv4Address(match)
+        except ipaddress.AddressValueError:
+            continue
+        values[str(parsed)] = None
+    return list(values)
+
+
 def resolve_dhcp_ip(device: dict[str, str]) -> tuple[str, str]:
     access_port = device.get("access_port", "")
     if not access_port:
@@ -137,17 +114,14 @@ def resolve_dhcp_ip(device: dict[str, str]) -> tuple[str, str]:
         return "", f"Invalid access port: {access_port}"
 
     try:
-        with socket.create_connection(
-            (CONSOLE_HOST, access_port_number),
-            timeout=CONSOLE_TIMEOUT_SECONDS,
-        ) as console:
+        with socket.create_connection((CONSOLE_HOST, access_port_number), timeout=CONSOLE_TIMEOUT_SECONDS) as console:
             console.settimeout(0.5)
             receive_console_output(console, pause_seconds=0.2)
             console.sendall(b"\n")
             receive_console_output(console, pause_seconds=0.2)
-            console.sendall(f"{DHCP_USERNAME}\n".encode())
+            console.sendall(f"{DEFAULT_USERNAME}\n".encode())
             receive_console_output(console, pause_seconds=0.2)
-            console.sendall(f"{DHCP_PASSWORD}\n".encode())
+            console.sendall(f"{DEFAULT_PASSWORD}\n".encode())
             receive_console_output(console, pause_seconds=0.6)
             console.sendall(b"hostname -I\n")
             output = receive_console_output(console, pause_seconds=0.8)
@@ -158,7 +132,8 @@ def resolve_dhcp_ip(device: dict[str, str]) -> tuple[str, str]:
         if candidate.startswith("127."):
             continue
         return candidate, ""
-    return "", "No IPv4 address found in console output"
+
+    return "", "No IPv4 address discovered for DHCP device"
 
 
 def connect_ssh(hostname: str, username: str, password: str) -> paramiko.SSHClient:
@@ -175,16 +150,33 @@ def connect_ssh(hostname: str, username: str, password: str) -> paramiko.SSHClie
     return client
 
 
+def parse_dns_from_text(text: str) -> list[str]:
+    values = OrderedDict()
+
+    for match in re.findall(r"^\s*nameserver\s+(\S+)", text, flags=re.IGNORECASE | re.MULTILINE):
+        values[match.strip()] = None
+
+    for line in text.splitlines():
+        if "dns server" not in line.lower() and "dns servers" not in line.lower():
+            continue
+        for candidate in unique_ipv4_values(line):
+            values[candidate] = None
+
+    if not values:
+        for candidate in unique_ipv4_values(text):
+            values[candidate] = None
+
+    return [value for value in values.keys() if not value.startswith("127.")]
+
+
 def read_dns_settings(hostname: str, username: str, password: str) -> tuple[list[str], str]:
     client = connect_ssh(hostname, username, password)
     try:
-        _, stdout, stderr = client.exec_command(
-            "sh -lc 'cat /etc/resolv.conf 2>/dev/null; printf '\\n'; resolvectl dns 2>/dev/null; printf '\\n'; systemd-resolve --status 2>/dev/null'",
-            timeout=SSH_TIMEOUT_SECONDS,
-        )
+        command = "sh -lc 'cat /etc/resolv.conf 2>/dev/null; echo; resolvectl dns 2>/dev/null; echo; systemd-resolve --status 2>/dev/null'"
+        _, stdout, stderr = client.exec_command(command, timeout=SSH_TIMEOUT_SECONDS)
         output = stdout.read().decode("utf-8", errors="replace")
-        error = stderr.read().decode("utf-8", errors="replace").strip()
-        return preferred_dns_servers(unique_ipv4_values(output)), error
+        error_text = stderr.read().decode("utf-8", errors="replace").strip()
+        return parse_dns_from_text(output), error_text
     finally:
         client.close()
 
@@ -195,65 +187,63 @@ def canonical_dns(dns_servers: list[str]) -> str:
     return ", ".join(dns_servers)
 
 
-def evaluate_dns_servers(dns_servers: list[str]) -> tuple[str, str]:
+def evaluate_dns(dns_servers: list[str]) -> tuple[str, str]:
     if not dns_servers:
         return "FAIL", "No DNS servers found"
-    unexpected = [server for server in dns_servers if server not in APPROVED_DNS]
+
+    unique = set(dns_servers)
+    if not unique.intersection(APPROVED_DNS):
+        return "FAIL", "DNS does not include DNS1 or DNS2"
+
+    unexpected = sorted(server for server in unique if server not in APPROVED_DNS)
     if unexpected:
         return "FAIL", f"Unexpected DNS server(s): {', '.join(unexpected)}"
-    return "SUCCESS", "Approved DNS settings detected"
+
+    return "SUCCESS", "DNS points to approved DNS1/DNS2"
 
 
-def send_failure_email(
-    device_name: str,
-    device_ip: str,
-    detected_dns: str,
-    reason: str,
-    timestamp: str,
-) -> bool:
-    message = EmailMessage()
-    message["Subject"] = f"DNS Configuration Alert: {device_name} ({device_ip})"
-    message["From"] = FROM_ADDRESS
-    message["To"] = TO_ADDRESS
-    message.set_content(
-        "Automated DNS monitoring detected a device with incorrect DNS settings.\n\n"
-        f"Hostname: {device_name}\n"
-        f"IP address: {device_ip}\n"
-        f"Detected DNS: {detected_dns}\n"
-        f"Expected DNS: {DNS1}, {DNS2}\n"
-        f"Status: FAIL\n"
-        f"Reason: {reason}\n"
-        f"Timestamp: {timestamp}\n"
-    )
-
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
-            server.ehlo()
-            failures = server.send_message(message)
-            return not failures
-    except (OSError, smtplib.SMTPException):
+def send_failure_email(hostname: str, device_ip: str, dns_servers: str, reason: str, timestamp: str) -> bool:
+    if not ALERT_SCRIPT.exists():
+        print(f"Alert script missing: {ALERT_SCRIPT}")
         return False
+
+    command = [
+        sys.executable,
+        str(ALERT_SCRIPT),
+        "--device-name",
+        hostname,
+        "--ip-address",
+        device_ip,
+        "--detected-dns",
+        dns_servers,
+        "--expected-dns",
+        f"{DNS1}, {DNS2}",
+        "--timestamp",
+        timestamp,
+    ]
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    if result.stderr.strip():
+        print(result.stderr.strip())
+    return result.returncode == 0
 
 
 def inspect_device(device: dict[str, str]) -> dict[str, str]:
     runtime_ip = device["inventory_address"]
     if runtime_ip.lower() == "dhcp":
-        runtime_ip, ip_error = resolve_dhcp_ip(device)
+        runtime_ip, error = resolve_dhcp_ip(device)
         if not runtime_ip:
             return {
                 "name": device["name"],
                 "ip_address": "DHCP",
                 "status": "FAIL",
                 "dns": "Unknown",
-                "reason": ip_error,
+                "reason": error,
             }
 
     try:
-        dns_servers, stderr_output = read_dns_settings(
-            runtime_ip,
-            device["username"],
-            device["password"],
-        )
+        dns_servers, stderr_text = read_dns_settings(runtime_ip, device["username"], device["password"])
     except Exception as exc:
         return {
             "name": device["name"],
@@ -263,9 +253,9 @@ def inspect_device(device: dict[str, str]) -> dict[str, str]:
             "reason": f"DNS read failed: {exc}",
         }
 
-    status, reason = evaluate_dns_servers(dns_servers)
-    if stderr_output and status == "SUCCESS":
-        reason = f"Approved DNS settings detected ({stderr_output})"
+    status, reason = evaluate_dns(dns_servers)
+    if status == "SUCCESS" and stderr_text:
+        reason = f"DNS check success (with stderr: {stderr_text})"
 
     return {
         "name": device["name"],
@@ -276,7 +266,7 @@ def inspect_device(device: dict[str, str]) -> dict[str, str]:
     }
 
 
-def print_result(result: dict[str, str], timestamp: str) -> None:
+def print_dns_result(timestamp: str, result: dict[str, str]) -> None:
     print(
         f"{timestamp} | Hostname: {result['name']} | IP address: {result['ip_address']} | "
         f"Status: {result['status']} | DNS IP address: {result['dns']}"
@@ -286,11 +276,11 @@ def print_result(result: dict[str, str], timestamp: str) -> None:
 
 
 def monitor_devices(interval_seconds: int, one_shot: bool = False) -> None:
-    print("Starting DNS settings monitor. Press Ctrl+C to stop.")
+    print("Starting DNS monitor-only loop. Press Ctrl+C to stop.")
     if one_shot:
-        print("One-shot mode enabled: one DNS pass will be executed.")
+        print("One-shot mode enabled.")
 
-    active_failure_signatures: dict[str, str] = {}
+    failure_signatures: dict[str, str] = {}
 
     while True:
         devices = load_devices()
@@ -299,27 +289,27 @@ def monitor_devices(interval_seconds: int, one_shot: bool = False) -> None:
         for device in devices:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             result = inspect_device(device)
-            print_result(result, timestamp)
+            print_dns_result(timestamp, result)
 
             if result["status"] == "SUCCESS":
-                active_failure_signatures.pop(device["name"], None)
+                failure_signatures.pop(device["name"], None)
                 continue
 
             signature = f"{result['ip_address']}|{result['dns']}|{result['reason']}"
-            if active_failure_signatures.get(device["name"]) == signature:
+            if failure_signatures.get(device["name"]) == signature:
                 continue
 
             email_sent = send_failure_email(
-                result["name"],
-                result["ip_address"],
-                result["dns"],
-                result["reason"],
-                timestamp,
+                hostname=result["name"],
+                device_ip=result["ip_address"],
+                dns_servers=result["dns"],
+                reason=result["reason"],
+                timestamp=timestamp,
             )
-            active_failure_signatures[device["name"]] = signature
+            failure_signatures[device["name"]] = signature
             print(
-                f"{timestamp} | Hostname: {result['name']} | Email alert: "
-                f"{'SENT' if email_sent else 'FAILED'}"
+                f"{timestamp} | Hostname: {result['name']} | "
+                f"Email alert: {'SENT' if email_sent else 'FAILED'}"
             )
 
         if one_shot:
@@ -330,10 +320,15 @@ def monitor_devices(interval_seconds: int, one_shot: bool = False) -> None:
 
 def main() -> int:
     args = parse_args()
+
+    if not CSV_FILE.exists():
+        print(f"Inventory file not found: {CSV_FILE}")
+        return 1
+
     try:
         monitor_devices(interval_seconds=args.interval, one_shot=args.one_shot)
     except KeyboardInterrupt:
-        print("DNS settings monitor stopped.")
+        print("DNS monitor stopped.")
     return 0
 
 
