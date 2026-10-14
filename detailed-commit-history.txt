@@ -1,0 +1,17 @@
+commit a9da518809a37377b75d6f862eaa4120d693ea8f
+Author: nathanmcclora-create <nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 19:38:23 2026 +0000
+
+    Add files via upload
+
+commit c8edb311435d1850a2974cbeb5a523edea67650b
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 19:29:05 2026 +0000
+
+    Staged a new repository from local directory to Github for Task 2
+
+commit 415ad98997b6ab730d30ae3740c64d4870e44c5d
+Author: Nathan McClora <Nathan.mcclora@gmail.com>
+Date:   Sun Aug 30 19:25:34 2026 +0000
+
+    Initial commit

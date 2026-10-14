@@ -1,6 +1,7 @@
 """Connect to each device, fix incorrect DNS settings, and verify the internal DNS configuration."""
 
 import csv
+import ipaddress
 import re
 import shlex
 import subprocess
@@ -16,6 +17,23 @@ APPROVED_DNS = {DNS1, DNS2}
 USERNAME = "ubuntu"
 PASSWORD = "ubuntu"
 SSH_TIMEOUT_SECONDS = 10
+
+
+def extract_dns_servers(output: str) -> list[str]:
+    """Return non-loopback IPv4 DNS servers found in command output."""
+    servers: list[str] = []
+    for candidate in re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", output):
+        try:
+            address = ipaddress.IPv4Address(candidate)
+        except ipaddress.AddressValueError:
+            continue
+        if address.is_loopback:
+            continue
+
+        server = str(address)
+        if server not in servers:
+            servers.append(server)
+    return servers
 
 
 def load_devices() -> list[dict[str, str]]:
@@ -55,11 +73,11 @@ def read_dns_settings(device: dict[str, str]) -> list[str]:
             auth_timeout=SSH_TIMEOUT_SECONDS,
         )
         _, stdout, _ = client.exec_command(
-            "cat /etc/resolv.conf 2>/dev/null || resolvectl dns",
+            "resolvectl dns 2>/dev/null; cat /etc/resolv.conf 2>/dev/null",
             timeout=SSH_TIMEOUT_SECONDS,
         )
         output = stdout.read().decode("utf-8", errors="replace")
-        return re.findall(r"^\s*nameserver\s+(\S+)", output, re.MULTILINE)
+        return extract_dns_servers(output)
     except Exception:
         return []
     finally:
